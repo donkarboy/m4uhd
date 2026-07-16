@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Player</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #000; width: 100vw; height: 100vh; overflow: hidden; font-family: sans-serif; }
 
         #loader {
             position: fixed; inset: 0; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; background: #000; gap: 20px; z-index: 10;
+            align-items: center; justify-content: center; background: #000; gap: 16px; z-index: 10;
         }
         .spinner {
             width: 48px; height: 48px; border: 4px solid #222;
@@ -18,194 +18,579 @@
             animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        #loader p  { color: #aaa; font-size: 14px; letter-spacing: 0.05em; }
-        #status    { color: #555; font-size: 12px; margin-top: 4px; }
+        #loader-title { color: #ccc; font-size: 14px; letter-spacing: 0.05em; }
+        #status       { color: #555; font-size: 12px; }
 
-        #error-box {
-            position: fixed; inset: 0; display: none; flex-direction: column;
-            align-items: center; justify-content: center; background: #0d0d0d;
-            gap: 12px; padding: 24px; text-align: center;
+        #steps { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; min-width: 260px; }
+        .step-row { display: flex; align-items: center; gap: 10px; }
+        .step-dot {
+            width: 20px; height: 20px; border-radius: 50%;
+            border: 1.5px solid #333; background: #111;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 9px; color: #555; flex-shrink: 0; transition: all .2s;
         }
-        #error-box h2  { color: #e74c3c; font-size: 18px; }
-        #error-box p   { color: #888; font-size: 13px; max-width: 500px; line-height: 1.6; word-break: break-all; }
-        #retry-btn {
-            margin-top: 8px; padding: 8px 20px; background: #58a6ff; color: #000;
+        .step-dot.active { border-color: #58a6ff; color: #58a6ff; background: #0d2240; }
+        .step-dot.done   { border-color: #3fb950; color: #3fb950; background: #0a1f10; }
+        .step-dot.error  { border-color: #e74c3c; color: #e74c3c; background: #200a0a; }
+        .step-text { font-size: 12px; color: #555; transition: color .2s; }
+        .step-text.active { color: #aaa; }
+        .step-text.done   { color: #3fb950; }
+        .step-text.error  { color: #e74c3c; }
+
+        #server-picker {
+            display: none; position: fixed; inset: 0; background: #000;
+            flex-direction: column; align-items: center; justify-content: center;
+            gap: 14px; z-index: 9; padding: 24px;
+        }
+        #server-picker h2 { color: #e6edf3; font-size: 16px; font-weight: 500; }
+        #server-picker p  { color: #555; font-size: 12px; }
+        #server-list { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 4px; }
+        .srv-btn {
+            padding: 9px 20px; border: 1px solid #30363d; border-radius: 6px;
+            background: #161b22; color: #e6edf3; font-size: 13px; cursor: pointer;
+            transition: border-color .15s, background .15s;
+        }
+        .srv-btn:hover { border-color: #58a6ff; background: #0d2240; }
+
+        #ep-picker {
+            display: none; position: fixed; inset: 0; background: #000;
+            flex-direction: column; align-items: center; justify-content: center;
+            gap: 14px; z-index: 8; padding: 24px;
+        }
+        #ep-picker h2 { color: #e6edf3; font-size: 16px; font-weight: 500; }
+        #ep-picker p  { color: #555; font-size: 12px; }
+        #ep-select {
+            background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+            padding: 8px 14px; color: #e6edf3; font-size: 13px; outline: none;
+            min-width: 200px;
+        }
+        #ep-go {
+            padding: 8px 24px; background: #58a6ff; color: #000;
             border: none; border-radius: 6px; font-size: 13px; cursor: pointer;
         }
-        #retry-btn:hover { opacity: .85; }
+
+        #error-box {
+            display: none; position: fixed; inset: 0;
+            flex-direction: column; align-items: center; justify-content: center;
+            background: #0d0d0d; gap: 12px; padding: 24px; text-align: center; z-index: 20;
+        }
+        #error-box h2 { color: #e74c3c; font-size: 18px; }
+        #error-box p  { color: #888; font-size: 13px; max-width: 500px; line-height: 1.6; word-break: break-all; }
+        #retry-btn {
+            padding: 8px 20px; background: #58a6ff; color: #000;
+            border: none; border-radius: 6px; font-size: 13px; cursor: pointer; margin-top: 4px;
+        }
+
+        /* ── DEBUG MODE ── */
+        #debug-panel {
+            display: none; position: fixed; inset: 0; background: #0d0d0d;
+            flex-direction: column; z-index: 100; font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        #debug-header {
+            background: #111; border-bottom: 1px solid #222;
+            padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+        }
+        #debug-header .dbg-title { color: #58a6ff; font-size: 13px; font-weight: bold; }
+        #debug-header .dbg-url   { color: #555; font-size: 11px; word-break: break-all; flex: 1; }
+        #debug-header .dbg-badge {
+            background: #1a3a1a; color: #3fb950; border: 1px solid #3fb950;
+            padding: 2px 8px; border-radius: 4px; font-size: 10px; flex-shrink: 0;
+        }
+        #debug-log {
+            flex: 1; overflow-y: auto; padding: 12px 16px;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .dlog {
+            font-size: 12px; line-height: 1.6; display: flex; gap: 10px; align-items: flex-start;
+        }
+        .dlog .ts   { color: #333; flex-shrink: 0; font-size: 10px; padding-top: 2px; }
+        .dlog .tag  {
+            flex-shrink: 0; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+            font-weight: bold; min-width: 54px; text-align: center;
+        }
+        .dlog .msg  { color: #aaa; word-break: break-all; }
+        .dlog.info  .tag { background: #0d2240; color: #58a6ff; border: 1px solid #1a3a6a; }
+        .dlog.ok    .tag { background: #0a1f10; color: #3fb950; border: 1px solid #1a4020; }
+        .dlog.warn  .tag { background: #2a1f00; color: #e3b341; border: 1px solid #4a3500; }
+        .dlog.error .tag { background: #200a0a; color: #e74c3c; border: 1px solid #4a1010; }
+        .dlog.data  .tag { background: #1a1a2e; color: #a78bfa; border: 1px solid #3a2a5e; }
+        .dlog.ok    .msg { color: #3fb950; }
+        .dlog.error .msg { color: #e74c3c; }
+        .dlog.warn  .msg { color: #e3b341; }
+        .dlog.data  .msg { color: #c9b8ff; }
+
+        .dlog-section {
+            margin: 6px 0 2px; font-size: 10px; color: #333;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .dlog-section::before, .dlog-section::after {
+            content: ''; flex: 1; height: 1px; background: #1a1a1a;
+        }
+        .dlog-section span { color: #444; white-space: nowrap; }
+
+        #debug-footer {
+            background: #111; border-top: 1px solid #1a1a1a;
+            padding: 8px 16px; display: flex; gap: 10px; align-items: center; flex-shrink: 0;
+        }
+        #debug-status { color: #555; font-size: 11px; flex: 1; }
+        .dbg-btn {
+            padding: 5px 14px; border-radius: 4px; font-size: 11px; cursor: pointer; border: none;
+        }
+        .dbg-btn.copy { background: #161b22; color: #aaa; border: 1px solid #30363d; }
+        .dbg-btn.copy:hover { border-color: #58a6ff; color: #58a6ff; }
+        .dbg-btn.retry { background: #58a6ff; color: #000; }
+
+        #debug-result {
+            margin: 0 16px 10px;
+            background: #111; border: 1px solid #1a1a1a; border-radius: 6px;
+            padding: 10px 14px; display: none; flex-direction: column; gap: 6px;
+        }
+        #debug-result .dr-label { color: #555; font-size: 10px; }
+        #debug-result .dr-url   { color: #58a6ff; font-size: 12px; word-break: break-all; }
+        #debug-result .dr-open  {
+            align-self: flex-start; margin-top: 4px;
+            padding: 5px 14px; background: #3fb950; color: #000;
+            border: none; border-radius: 4px; font-size: 11px; cursor: pointer;
+        }
     </style>
 </head>
 <body>
 
 <div id="loader">
     <div class="spinner"></div>
-    <p>Loading player…</p>
+    <p id="loader-title">Loading player…</p>
     <span id="status"></span>
+    <div id="steps">
+        <div class="step-row"><div class="step-dot" id="d1">1</div><span class="step-text" id="t1">Fetch watch page</span></div>
+        <div class="step-row"><div class="step-dot" id="d2">2</div><span class="step-text" id="t2">Get server list</span></div>
+        <div class="step-row"><div class="step-dot" id="d3">3</div><span class="step-text" id="t3">Resolve embed URL</span></div>
+        <div class="step-row"><div class="step-dot" id="d4">4</div><span class="step-text" id="t4">Launch player</span></div>
+    </div>
+</div>
+
+<div id="server-picker">
+    <h2>Choose Server</h2>
+    <p>Multiple servers available — pick one to play</p>
+    <div id="server-list"></div>
+</div>
+
+<div id="ep-picker">
+    <h2>Choose Episode</h2>
+    <p id="ep-count"></p>
+    <select id="ep-select"></select>
+    <button id="ep-go">Play</button>
 </div>
 
 <div id="error-box">
     <h2>Playback Error</h2>
     <p id="error-msg">Could not load the video.</p>
     <p id="error-detail" style="font-size:11px;color:#555;margin-top:8px;"></p>
-    <button id="retry-btn" onclick="init()">Retry</button>
+    <button id="retry-btn" onclick="location.reload()">Retry</button>
+</div>
+
+<!-- DEBUG PANEL -->
+<div id="debug-panel">
+    <div id="debug-header">
+        <span class="dbg-title">🔍 DEBUG</span>
+        <span class="dbg-url" id="dbg-url">—</span>
+        <span class="dbg-badge">DEBUG MODE</span>
+    </div>
+    <div id="debug-log"></div>
+    <div id="debug-result">
+        <span class="dr-label">✅ EMBED URL FOUND</span>
+        <span class="dr-url" id="dr-url-val"></span>
+        <button class="dr-open" id="dr-open-btn">▶ Open Player</button>
+    </div>
+    <div id="debug-footer">
+        <span id="debug-status">Running…</span>
+        <button class="dbg-btn copy" onclick="copyLog()">Copy Log</button>
+        <button class="dbg-btn retry" onclick="location.reload()">Retry</button>
+    </div>
 </div>
 
 <script>
-const loader   = document.getElementById("loader");
-const statusEl = document.getElementById("status");
-const errorBox = document.getElementById("error-box");
-const errorMsg = document.getElementById("error-msg");
-const errorDet = document.getElementById("error-detail");
+// ── globals ───────────────────────────────────────────────────────
+const IS_DEBUG = window.location.pathname.endsWith("-debug") ||
+                 window.location.search.includes("debug=1");
 
-function log(msg) { statusEl.textContent = msg; }
+// ── normal UI refs ────────────────────────────────────────────────
+const loader       = document.getElementById("loader");
+const statusEl     = document.getElementById("status");
+const errorBox     = document.getElementById("error-box");
+const serverPicker = document.getElementById("server-picker");
+const serverList   = document.getElementById("server-list");
+const epPicker     = document.getElementById("ep-picker");
+const epSelect     = document.getElementById("ep-select");
 
-function showError(msg, detail = "") {
-    loader.style.display   = "none";
-    errorBox.style.display = "flex";
-    errorMsg.textContent   = msg;
-    errorDet.textContent   = detail;
+// ── debug UI refs ─────────────────────────────────────────────────
+const debugPanel  = document.getElementById("debug-panel");
+const debugLog    = document.getElementById("debug-log");
+const debugStatus = document.getElementById("debug-status");
+const debugResult = document.getElementById("debug-result");
+const drUrlVal    = document.getElementById("dr-url-val");
+
+// ── debug logger ──────────────────────────────────────────────────
+const _logs = [];
+function dlog(level, tag, msg) {
+    const now = new Date();
+    const ts  = now.toTimeString().slice(0, 8) + "." + String(now.getMilliseconds()).padStart(3, "0");
+    _logs.push(`[${ts}] [${tag}] ${msg}`);
+
+    if (!IS_DEBUG) return;
+
+    const row = document.createElement("div");
+    row.className = "dlog " + level;
+    row.innerHTML = `<span class="ts">${ts}</span><span class="tag">${tag}</span><span class="msg">${escHtml(msg)}</span>`;
+    debugLog.appendChild(row);
+    debugLog.scrollTop = debugLog.scrollHeight;
+}
+function dSection(title) {
+    if (!IS_DEBUG) return;
+    const div = document.createElement("div");
+    div.className = "dlog-section";
+    div.innerHTML = `<span>${title}</span>`;
+    debugLog.appendChild(div);
+}
+function escHtml(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function copyLog() {
+    navigator.clipboard.writeText(_logs.join("\n")).then(() => {
+        debugStatus.textContent = "✓ Copied to clipboard!";
+        setTimeout(() => { debugStatus.textContent = "Done."; }, 2000);
+    });
 }
 
-function resetUI() {
-    loader.style.display   = "flex";
-    errorBox.style.display = "none";
-    statusEl.textContent   = "";
-    // remove any old iframe
-    const old = document.getElementById("player-frame");
-    if (old) old.remove();
+// ── step helpers (normal mode) ────────────────────────────────────
+function step(n, state, text) {
+    if (IS_DEBUG) return;
+    const dot = document.getElementById("d" + n);
+    const txt = document.getElementById("t" + n);
+    dot.className = "step-dot " + state;
+    txt.className = "step-text " + state;
+    if (text) txt.textContent = text;
+    dot.textContent = state === "done" ? "✓" : state === "error" ? "✕" : String(n);
+}
+function log(msg) {
+    if (!IS_DEBUG) statusEl.textContent = msg;
+    else debugStatus.textContent = msg;
+}
+function showError(msg, detail) {
+    if (IS_DEBUG) {
+        dlog("error", "FATAL", msg);
+        if (detail) dlog("error", "DETAIL", detail);
+        debugStatus.textContent = "❌ Failed — " + msg;
+        return;
+    }
+    loader.style.display       = "none";
+    serverPicker.style.display = "none";
+    epPicker.style.display     = "none";
+    errorBox.style.display     = "flex";
+    document.getElementById("error-msg").textContent    = msg;
+    document.getElementById("error-detail").textContent = detail || "";
 }
 
-// ── proxy list (corsproxy.io first) ──────────────────────────────
+// ── CORS proxy list ───────────────────────────────────────────────
 const PROXIES = [
     u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
     u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
     u => `https://thingproxy.freeboard.io/fetch/${u}`,
 ];
 
-async function fetchViaProxy(url) {
+async function proxyFetch(url, opts = {}) {
     for (let i = 0; i < PROXIES.length; i++) {
+        const proxyUrl = PROXIES[i](url);
+        dlog("info", `PROXY ${i+1}`, `GET → ${proxyUrl.slice(0, 80)}…`);
         try {
-            log(`Fetching via proxy ${i + 1} of ${PROXIES.length}…`);
-            const res = await fetch(PROXIES[i](url), { signal: AbortSignal.timeout(10000) });
-            if (!res.ok) continue;
-            const text = await res.text();
-            if (text.length > 100) return text;   // sanity: real page
-        } catch (_) {}
+            const r = await fetch(proxyUrl, { ...opts, signal: AbortSignal.timeout(12000) });
+            dlog(r.ok ? "info" : "warn", "HTTP", `Status ${r.status} ${r.statusText}`);
+            if (!r.ok) continue;
+            const text = await r.text();
+            dlog(r.ok && text.length > 200 ? "ok" : "warn", "SIZE", `Response ${text.length} bytes`);
+            if (text.length > 200) {
+                dlog("ok", "PROXY", `Proxy ${i+1} succeeded`);
+                return text;
+            }
+            dlog("warn", "SKIP", `Too short — trying next proxy`);
+        } catch (e) {
+            dlog("error", "PROXY", `Proxy ${i+1} error: ${e.message}`);
+        }
     }
-    throw new Error("All proxies failed. Check your network or try again.");
+    throw new Error("All proxies failed — check your connection.");
 }
 
-// ── extract vid param from abyssplayer page ───────────────────────
-function extractAbyssVid(html) {
-    // abyssplayer.com/?v=<vid>  — page JS or meta usually has it again
-    const patterns = [
-        /\?v=([A-Za-z0-9_\-]{4,})/,
-        /vid['":\s=]+['"]([A-Za-z0-9_\-]{4,})['"]/i,
-        /source['":\s]+['"]([^'"]{10,})['"]/i,
-        /file['":\s]+['"]([^'"]{10,})['"]/i,
-        /(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/,
-    ];
-    for (const re of patterns) {
-        const m = html.match(re);
-        if (m) return m[1];
+async function proxyPost(url, data, referer) {
+    const body = new URLSearchParams(data).toString();
+    dlog("info", "POST", `${url}`);
+    dlog("data", "BODY", JSON.stringify(data));
+    const opts = {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": referer,
+        },
+        body,
+    };
+    for (let i = 0; i < PROXIES.length; i++) {
+        const proxyUrl = PROXIES[i](url);
+        dlog("info", `PROXY ${i+1}`, `POST → ${proxyUrl.slice(0, 80)}…`);
+        try {
+            const r = await fetch(proxyUrl, { ...opts, signal: AbortSignal.timeout(12000) });
+            dlog(r.ok ? "info" : "warn", "HTTP", `Status ${r.status}`);
+            if (!r.ok) continue;
+            const text = await r.text();
+            dlog("info", "SIZE", `${text.length} bytes`);
+            if (text.length > 10) {
+                dlog("data", "RESP", text.slice(0, 300) + (text.length > 300 ? "…" : ""));
+                return text;
+            }
+        } catch (e) {
+            dlog("error", "PROXY", `Proxy ${i+1} error: ${e.message}`);
+        }
     }
-    return null;
+    throw new Error("POST via proxy failed.");
 }
 
-// ── play a URL in a fullscreen iframe ────────────────────────────
-function playInIframe(src) {
-    log("Launching player…");
+// ── parsers ───────────────────────────────────────────────────────
+function parseCSRF(html) {
+    const m = html.match(/<meta name="csrf-token" content="([^"]+)"/);
+    const token = m ? m[1] : "";
+    if (token) dlog("ok",   "CSRF",  `Token: ${token.slice(0,20)}…`);
+    else       dlog("error","CSRF",  `Token NOT found — page structure may have changed`);
+    return token;
+}
+
+function parseEpisodeIds(html) {
+    const eps = [...html.matchAll(/idepisode=["'](\w+)["'][^>]*>([^<]*)/g)]
+        .map(m => ({ id: m[1], label: m[2].trim() || m[1] }));
+    dlog(eps.length ? "ok" : "error", "EPS", `Found ${eps.length} episode(s)`);
+    if (eps.length) dlog("data", "EPS", eps.slice(0,5).map(e => `${e.label}=${e.id}`).join(", ") + (eps.length > 5 ? "…" : ""));
+    return eps;
+}
+
+function parseServerSpans(html) {
+    const re = /<span[^>]+data="([^"]{10,})"[^>]*>([\s\S]*?)<\/span>/g;
+    const out = [];
+    for (const m of html.matchAll(re)) {
+        const label = m[2].replace(/<[^>]+>/g, "").trim() || "Server";
+        out.push({ label, data: m[1] });
+    }
+    dlog(out.length ? "ok" : "error", "SRV", `Found ${out.length} server(s): ${out.map(s=>s.label).join(", ")}`);
+    if (out.length) out.forEach(s => dlog("data", "SRV", `${s.label} → data="${s.data.slice(0,40)}…"`));
+    return out;
+}
+
+function parseIframe(html) {
+    const m = html.match(/<iframe[^>]+src="([^"]+)"/i);
+    const src = m ? m[1] : "";
+    dlog(src ? "ok" : "warn", "IFRAME", src ? `src="${src}"` : "No <iframe src> found in response");
+    return src;
+}
+
+function getRoot(url) { const p = new URL(url); return `${p.protocol}//${p.host}`; }
+
+// ── play embed ────────────────────────────────────────────────────
+function playEmbed(src) {
+    dlog("ok", "PLAY", `Launching: ${src}`);
+    step(4, "active", "Launching player…");
+
+    if (IS_DEBUG) {
+        // In debug mode: show result box + offer to open
+        debugResult.style.display = "flex";
+        drUrlVal.textContent = src;
+        document.getElementById("dr-open-btn").onclick = () => {
+            window.open(src, "_blank");
+        };
+        debugStatus.textContent = "✅ Done — embed URL resolved successfully";
+        return;
+    }
+
     const iframe = document.createElement("iframe");
-    iframe.id             = "player-frame";
-    iframe.src            = src;
+    iframe.src             = src;
     iframe.allowFullscreen = true;
-    iframe.referrerPolicy = "no-referrer";
-    iframe.allow          = "fullscreen; encrypted-media; picture-in-picture; autoplay";
-    iframe.style.cssText  = "position:fixed;inset:0;width:100%;height:100%;border:none;z-index:5;";
-    // sandbox kept permissive so the player's own JS can run
-    iframe.sandbox        = "allow-scripts allow-same-origin allow-forms allow-popups allow-presentation";
-
-    iframe.onload = () => { loader.style.display = "none"; };
+    iframe.referrerPolicy  = "no-referrer";
+    iframe.allow           = "fullscreen; encrypted-media; picture-in-picture; autoplay";
+    iframe.sandbox         = "allow-scripts allow-same-origin allow-forms allow-popups allow-presentation";
+    iframe.style.cssText   = "position:fixed;inset:0;width:100%;height:100%;border:none;z-index:5;";
+    iframe.onload          = () => { loader.style.display = "none"; };
     document.body.appendChild(iframe);
-
-    // fallback hide loader after 6s in case onload never fires (cross-origin)
     setTimeout(() => { loader.style.display = "none"; }, 6000);
+    step(4, "done", "Player loaded");
 }
 
-// ── main ─────────────────────────────────────────────────────────
+function bestServer(servers) {
+    const order = ["#h", "#m", "#backup"];
+    for (const pref of order) {
+        const s = servers.find(s => s.label.toLowerCase().includes(pref));
+        if (s) return s;
+    }
+    return servers[0];
+}
+
+async function resolveAndPlay(servers, token, rootUrl, m4uUrl) {
+    step(3, "active", `Resolving ${servers.length} server(s)…`);
+    dSection("STEP 3 — Resolve embed URLs");
+
+    const resolved = await Promise.all(servers.map(async srv => {
+        dlog("info", "AJAX", `/ajax  server=${srv.label}`);
+        try {
+            const html = await proxyPost(`${rootUrl}/ajax`, { m4u: srv.data, _token: token }, m4uUrl);
+            const src  = parseIframe(html);
+            return { ...srv, src };
+        } catch (e) {
+            dlog("error", "AJAX", `Failed for ${srv.label}: ${e.message}`);
+            return { ...srv, src: "" };
+        }
+    }));
+
+    const valid = resolved.filter(s => s.src);
+    dlog(valid.length ? "ok" : "error", "VALID", `${valid.length}/${servers.length} server(s) resolved`);
+
+    if (!valid.length) throw new Error("No embed URLs could be resolved from any server.");
+
+    step(3, "done", `${valid.length} embed URL(s) found`);
+
+    if (valid.length === 1) { playEmbed(valid[0].src); return; }
+
+    const best = bestServer(valid);
+    dlog("ok", "AUTO", `Auto-selected: ${best.label} → ${best.src}`);
+    if (best && best.src) {
+        playEmbed(best.src);
+        if (!IS_DEBUG) showServerPicker(valid, best.label);
+        return;
+    }
+    if (!IS_DEBUG) showServerPicker(valid, null);
+}
+
+function showServerPicker(servers, autoLabel) {
+    serverList.innerHTML = "";
+    servers.forEach(srv => {
+        const btn = document.createElement("button");
+        btn.className   = "srv-btn";
+        btn.textContent = srv.label + (srv.label === autoLabel ? " ▶" : "");
+        btn.onclick     = () => {
+            serverPicker.style.display = "none";
+            const old = document.querySelector("iframe");
+            if (old) old.remove();
+            loader.style.display = "flex";
+            step(4, "", "Launch player");
+            playEmbed(srv.src);
+        };
+        serverList.appendChild(btn);
+    });
+    if (!autoLabel) { serverPicker.style.display = "flex"; loader.style.display = "none"; }
+}
+
+let _token = "", _rootUrl = "", _m4uUrl = "";
+
+async function runEpisode(epId) {
+    epPicker.style.display = "none";
+    loader.style.display   = "flex";
+    dSection("STEP 2b — Episode servers");
+    dlog("info", "AJAXTV", `POST /ajaxtv  idepisode=${epId}`);
+    step(2, "active", `POST /ajaxtv  ep=${epId}`);
+
+    const html = await proxyPost(`${_rootUrl}/ajaxtv`, { idepisode: epId, _token }, _m4uUrl);
+    const servers = parseServerSpans(html);
+    if (!servers.length) throw new Error("No servers returned for this episode.");
+    step(2, "done", `Servers: ${servers.map(s => s.label).join(", ")}`);
+    await resolveAndPlay(servers, _token, _rootUrl, _m4uUrl);
+}
+
+// ── main ──────────────────────────────────────────────────────────
 async function init() {
-    resetUI();
-
-    // Accept embed URL via:
-    //   ?v=<vid>            → build abyssplayer URL ourselves
-    //   ?embed=<full-url>   → use that URL directly
-    //   ?url=<full-url>     → same
-    //   bare ?<full-url>    → treat whole search string as URL (for easy linking)
-    const params = new URLSearchParams(window.location.search);
-
-    let embedUrl = params.get("embed") || params.get("url") || null;
-
-    // ?v=<vid>  → construct the abyssplayer URL
-    if (!embedUrl && params.get("v")) {
-        embedUrl = `https://abyssplayer.com/?v=${params.get("v")}`;
+    // Show debug panel or normal loader
+    if (IS_DEBUG) {
+        loader.style.display      = "none";
+        debugPanel.style.display  = "flex";
+        dlog("info", "MODE", "Debug mode active");
     }
 
-    // fallback: bare hash  #https://abyssplayer.com/?v=xxx
-    if (!embedUrl && window.location.hash.startsWith("#http")) {
-        embedUrl = decodeURIComponent(window.location.hash.slice(1));
-    }
+    // Parse URL — strip -debug suffix if present
+    let full = window.location.pathname + window.location.search;
+    full = full.replace(/-debug$/, "").replace(/[?&]debug=1/, "");
 
-    if (!embedUrl) {
-        showError(
-            "No embed URL provided.",
-            "Use ?v=<vid>  or  ?embed=<abyssplayer-url>  or  ?url=<abyssplayer-url>"
-        );
+    const m = full.match(/(https?:\/\/[^\s]+)/);
+    if (!m) {
+        showError("No URL found in path.", "Use: /m4uhd/https://ww1.m4uhd.page/watch-movie-...");
         return;
     }
 
-    // If the URL is already a direct abyssplayer.com URL we can iframe it right away.
-    // abyssplayer.com allows iframing, so try directly first to save a proxy round-trip.
-    if (embedUrl.includes("abyssplayer.com")) {
-        log("Loading AbyssPlayer…");
-        playInIframe(embedUrl);
-        return;
-    }
+    const m4uUrl  = decodeURIComponent(m[1]);
+    _m4uUrl       = m4uUrl;
+    _rootUrl      = getRoot(m4uUrl);
+    const isMovie = m4uUrl.includes("/watch-movie-");
 
-    // Otherwise it might be a wrapper/redirect page — fetch + extract the real URL.
+    dlog("info", "URL",  m4uUrl);
+    dlog("info", "ROOT", _rootUrl);
+    dlog("info", "TYPE", isMovie ? "Movie" : "TV Series");
+
+    if (IS_DEBUG) document.getElementById("dbg-url").textContent = m4uUrl;
+
     try {
-        log("Fetching embed page…");
-        const html = await fetchViaProxy(embedUrl);
+        // ── Step 1 ────────────────────────────────────────────
+        dSection("STEP 1 — Fetch watch page");
+        step(1, "active", "Fetching " + m4uUrl.split("/").pop());
+        dlog("info", "FETCH", m4uUrl);
 
-        // Look for an abyssplayer URL inside the fetched HTML
-        const abyssMatch = html.match(/https?:\/\/abyssplayer\.com\/\?v=[A-Za-z0-9_\-]+/);
-        if (abyssMatch) {
-            log("Found AbyssPlayer URL…");
-            playInIframe(abyssMatch[1] || abyssMatch[0]);
-            return;
+        const html = await proxyFetch(m4uUrl);
+        dlog("data", "HTML", `First 200 chars: ${html.slice(0,200).replace(/\s+/g," ")}`);
+
+        _token = parseCSRF(html);
+        if (!_token) throw new Error("CSRF token not found — page structure may have changed.");
+        step(1, "done", `Token: ${_token.slice(0, 14)}…`);
+
+        // ── Step 2 ────────────────────────────────────────────
+        dSection("STEP 2 — Server list");
+        step(2, "active", isMovie ? "Parsing server buttons…" : "Finding episodes…");
+
+        if (isMovie) {
+            const servers = parseServerSpans(html);
+            if (!servers.length) throw new Error("No server buttons found on movie page.");
+            step(2, "done", `Servers: ${servers.map(s => s.label).join(", ")}`);
+            await resolveAndPlay(servers, _token, _rootUrl, m4uUrl);
+
+        } else {
+            const epIds = parseEpisodeIds(html);
+            if (!epIds.length) throw new Error("No episode IDs found on page.");
+            step(2, "done", `${epIds.length} episodes found`);
+
+            const epParam = new URLSearchParams(window.location.search).get("ep");
+            let chosen = null;
+            if (epParam) chosen = epIds.find(e => e.label.toLowerCase().includes(epParam.toLowerCase())) || epIds[0];
+
+            if (chosen) {
+                dlog("info", "EP", `Auto-selected episode: ${chosen.label} (${chosen.id})`);
+                await runEpisode(chosen.id);
+            } else {
+                if (IS_DEBUG) {
+                    dlog("info", "EP", `No ?ep= param — would show episode picker. Picking first: ${epIds[0].label}`);
+                    await runEpisode(epIds[0].id);
+                } else {
+                    epSelect.innerHTML = epIds.map(e => `<option value="${e.id}">${e.label || e.id}</option>`).join("");
+                    document.getElementById("ep-count").textContent = `${epIds.length} episodes available`;
+                    epPicker.style.display = "flex";
+                    loader.style.display   = "none";
+                    document.getElementById("ep-go").onclick = async () => {
+                        const selId = epSelect.value;
+                        loader.style.display = "flex";
+                        step(2, "", "Get server list");
+                        step(3, "", "Resolve embed URL");
+                        step(4, "", "Launch player");
+                        try { await runEpisode(selId); }
+                        catch (e) { showError(e.message); }
+                    };
+                }
+            }
         }
 
-        // Look for any m3u8 or direct stream
-        const m3u8 = html.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/);
-        if (m3u8) {
-            // Can't iframe an m3u8 directly without a player — surface it
-            showError(
-                "Direct HLS stream found (no built-in player).",
-                m3u8[1]
-            );
-            return;
-        }
-
-        // Look for any iframe src in the fetched page
-        const iframeSrc = html.match(/<iframe[^>]+src=['"]([^'"]+)['"]/i);
-        if (iframeSrc) {
-            log("Found nested iframe…");
-            playInIframe(iframeSrc[1]);
-            return;
-        }
-
-        showError("Could not find a playable URL in the embed page.");
-    } catch (err) {
-        showError(err.message);
+    } catch (e) {
+        step(1, "error");
+        showError(e.message);
+        dlog("error", "FATAL", e.message);
+        if (IS_DEBUG) debugStatus.textContent = "❌ " + e.message;
     }
 }
 
