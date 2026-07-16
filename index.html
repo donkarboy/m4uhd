@@ -7,10 +7,8 @@
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #0d0d0d; min-height: 100vh; font-family: 'Courier New', monospace; color: #ccc; padding: 24px; }
-
         h1 { color: #58a6ff; font-size: 18px; margin-bottom: 6px; }
         p.sub { color: #444; font-size: 12px; margin-bottom: 20px; }
-
         .input-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
         #url-input {
             flex: 1; min-width: 260px; background: #161b22; border: 1px solid #30363d;
@@ -28,8 +26,6 @@
             padding: 10px 16px; background: #161b22; color: #888;
             border: 1px solid #30363d; border-radius: 6px; font-size: 13px; cursor: pointer;
         }
-
-        /* episode selector */
         #ep-row { display: none; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
         #ep-row label { color: #888; font-size: 12px; }
         #ep-select {
@@ -41,7 +37,6 @@
             padding: 8px 18px; background: #3fb950; color: #000;
             border: none; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: bold;
         }
-
         #proxy-grid { display: none; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
         .px {
             padding: 4px 10px; border-radius: 4px; font-size: 10px;
@@ -50,7 +45,6 @@
         .px.trying { border-color: #1a3a6a; color: #58a6ff; background: #0a1a30; }
         .px.ok     { border-color: #1a4020; color: #3fb950; background: #0a1f10; }
         .px.fail   { border-color: #3a1010; color: #e74c3c; background: #1a0808; }
-
         #log {
             background: #111; border: 1px solid #1a1a1a; border-radius: 6px;
             padding: 12px; height: 360px; overflow-y: auto;
@@ -75,14 +69,27 @@
         .ll.data .msg { color: #c9b8ff; }
         .ll.head .msg { color: #444; font-weight: bold; }
         .ll.head .tag { background: #1a1a1a; color: #333; border: 1px solid #222; }
-
         #copy-log-btn {
             padding: 7px 16px; background: #161b22; color: #888;
             border: 1px solid #30363d; border-radius: 5px;
             font-size: 11px; cursor: pointer; font-family: inherit; margin-bottom: 16px;
         }
         #copy-log-btn:hover { border-color: #58a6ff; color: #58a6ff; }
-
+        #worker-box {
+            background: #0a1a0a; border: 1px solid #1a4020; border-radius: 6px;
+            padding: 14px; margin-bottom: 16px; display: none;
+        }
+        #worker-box h2 { color: #3fb950; font-size: 13px; margin-bottom: 8px; }
+        #worker-box p  { color: #888; font-size: 11px; margin-bottom: 8px; line-height: 1.6; }
+        #worker-code {
+            background: #060f06; border: 1px solid #1a3010; border-radius: 4px;
+            padding: 10px; font-size: 10px; color: #7dc97d; white-space: pre; overflow-x: auto;
+            margin-bottom: 8px; max-height: 200px; overflow-y: auto;
+        }
+        #copy-worker-btn {
+            padding: 5px 14px; background: #3fb950; color: #000;
+            border: none; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: bold;
+        }
         #results { display: none; flex-direction: column; gap: 10px; }
         .result-card {
             background: #111; border: 1px solid #1a4020; border-radius: 6px; padding: 14px;
@@ -102,7 +109,7 @@
 <body>
 
 <h1>M4UHD Extractor</h1>
-<p class="sub">Paste any m4uhd.page URL — foxy-doxy handles POST, 22 public proxies as fallback for GET</p>
+<p class="sub">Paste any m4uhd.page URL — the worker must support cookie-aware POST (see setup below if 419 occurs)</p>
 
 <div class="input-row">
     <input id="url-input" type="text" placeholder="https://ww1.m4uhd.page/watch-tvseries-naruto-15347.html" spellcheck="false" />
@@ -110,11 +117,20 @@
     <button id="clear-btn" onclick="clearAll()">Clear</button>
 </div>
 
-<!-- episode picker shown after page is fetched -->
 <div id="ep-row">
     <label>Episode:</label>
     <select id="ep-select"></select>
     <button id="ep-go" onclick="runEpisode()">Get Servers</button>
+</div>
+
+<!-- Worker setup panel (shown on 419) -->
+<div id="worker-box">
+    <h2>⚠ 419 CSRF Error — Worker needs updating</h2>
+    <p>The site rejects POSTs because the CSRF token is tied to a session cookie. Your Cloudflare worker needs to
+    forward cookies between the GET and POST. Deploy this updated worker code at
+    <strong>movieworkers.andruilsyestems.workers.dev</strong>:</p>
+    <div id="worker-code"></div>
+    <button id="copy-worker-btn" onclick="copyWorker()">Copy Worker Code</button>
 </div>
 
 <div id="proxy-grid"></div>
@@ -123,9 +139,65 @@
 <div id="results"></div>
 
 <script>
-// ── 23 proxies — foxy-doxy first (supports POST + GET) ───────────
+// ── Worker code to deploy ─────────────────────────────────────────
+const WORKER_CODE = `// Cloudflare Worker — cookie-aware proxy for m4uhd
+// Supports GET (returns HTML + set-cookie header as X-Set-Cookie)
+// Supports POST (forwards cookies so CSRF token validates)
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const target = url.searchParams.get("url");
+    if (!target) return new Response("Missing ?url=", { status: 400 });
+
+    const headers = new Headers({
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,*/*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": new URL(target).origin + "/",
+    });
+
+    // Forward cookie if provided (for POST requests)
+    const cookieHeader = request.headers.get("X-Cookie");
+    if (cookieHeader) headers.set("Cookie", cookieHeader);
+
+    if (request.method === "POST") {
+      headers.set("Content-Type", "application/x-www-form-urlencoded");
+      headers.set("X-Requested-With", "XMLHttpRequest");
+      const body = await request.text();
+      const resp = await fetch(target, { method: "POST", headers, body });
+      const text = await resp.text();
+      return new Response(text, {
+        status: resp.status,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "text/plain",
+        }
+      });
+    }
+
+    // GET — fetch and expose session cookie
+    const resp = await fetch(target, { method: "GET", headers });
+    const text = await resp.text();
+    const setCookie = resp.headers.get("set-cookie") || "";
+    // Extract just name=value pairs (strip directives)
+    const cookieVal = setCookie.split(",")
+      .map(c => c.trim().split(";")[0])
+      .filter(Boolean).join("; ");
+
+    return new Response(text, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "text/html",
+        "X-Set-Cookie": cookieVal,
+      }
+    });
+  }
+};`;
+
+// ── Proxy list — foxy-doxy first ──────────────────────────────────
 const PROXY_DEFS = [
-    { name:"foxy-doxy",      post:true,  fn: u=>`https://movieworkers.andruilsyestems.workers.dev/?url=${encodeURIComponent(u)}` },
+    { name:"foxy-doxy",      post:true,  cookie:true, fn: u=>`https://movieworkers.andruilsyestems.workers.dev/?url=${encodeURIComponent(u)}` },
     { name:"corsproxy.io",   post:false, fn: u=>`https://corsproxy.io/?${encodeURIComponent(u)}` },
     { name:"allorigins/raw", post:false, fn: u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
     { name:"codetabs",       post:false, fn: u=>`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
@@ -153,22 +225,26 @@ const PROXY_DEFS = [
 // ── state ─────────────────────────────────────────────────────────
 let _logs=[], _running=false;
 let _token="", _rootUrl="", _rawUrl="", _episodes=[];
+let _sessionCookie="";   // KEY FIX: store session cookie from GET
+let _proxyIndex=-1;      // remember which proxy worked for GET
 
 // ── DOM ───────────────────────────────────────────────────────────
-const logEl     = document.getElementById("log");
-const resultsEl = document.getElementById("results");
-const proxyGrid = document.getElementById("proxy-grid");
-const runBtn    = document.getElementById("run-btn");
-const urlInput  = document.getElementById("url-input");
-const epRow     = document.getElementById("ep-row");
-const epSelect  = document.getElementById("ep-select");
-const pxEls     = {};
+const logEl      = document.getElementById("log");
+const resultsEl  = document.getElementById("results");
+const proxyGrid  = document.getElementById("proxy-grid");
+const runBtn     = document.getElementById("run-btn");
+const urlInput   = document.getElementById("url-input");
+const epRow      = document.getElementById("ep-row");
+const epSelect   = document.getElementById("ep-select");
+const workerBox  = document.getElementById("worker-box");
+const pxEls      = {};
+
+document.getElementById("worker-code").textContent = WORKER_CODE;
 
 // ── logger ────────────────────────────────────────────────────────
 function ts(){const n=new Date();return n.toTimeString().slice(0,8)+"."+String(n.getMilliseconds()).padStart(3,"0");}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
-
-function ll(level, tag, msg){
+function ll(level,tag,msg){
     const t=ts(); _logs.push(`[${t}] [${tag}] ${msg}`);
     const row=document.createElement("div"); row.className="ll "+level;
     row.innerHTML=`<span class="ts">${t}</span><span class="tag">${esc(tag)}</span><span class="msg">${esc(msg)}</span>`;
@@ -180,6 +256,7 @@ function lhead(title){
     logEl.appendChild(row);
 }
 function copyLog(){ navigator.clipboard.writeText(_logs.join("\n")); }
+function copyWorker(){ navigator.clipboard.writeText(WORKER_CODE); document.getElementById("copy-worker-btn").textContent="Copied!"; }
 
 // ── proxy grid ────────────────────────────────────────────────────
 function buildGrid(){
@@ -193,63 +270,88 @@ function buildGrid(){
 function pxState(i,state){ if(pxEls[i]) pxEls[i].className="px "+state; }
 function resetPx(){ PROXY_DEFS.forEach((_,i)=>pxState(i,"")); }
 
+// ── safe AbortSignal.timeout polyfill ─────────────────────────────
+function timeoutSignal(ms){
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(),ms);
+    return ctrl.signal;
+}
+
 // ── clear ─────────────────────────────────────────────────────────
 function clearAll(){
     logEl.innerHTML=""; resultsEl.innerHTML="";
     resultsEl.style.display="none";
     proxyGrid.style.display="none"; proxyGrid.innerHTML="";
     epRow.style.display="none"; epSelect.innerHTML="";
+    workerBox.style.display="none";
     _logs=[]; _token=""; _rootUrl=""; _rawUrl=""; _episodes=[];
+    _sessionCookie=""; _proxyIndex=-1;
 }
 
-// ── proxyFetch (GET — tries all proxies) ──────────────────────────
+// ── proxyFetch: GET — stores session cookie from X-Set-Cookie ─────
 async function proxyFetch(url){
     for(let i=0;i<PROXY_DEFS.length;i++){
         const def=PROXY_DEFS[i];
         pxState(i,"trying");
         ll("info",`P${i+1}/${PROXY_DEFS.length}`,`GET via ${def.name}`);
         try{
-            const r=await fetch(def.fn(url),{signal:AbortSignal.timeout(12000)});
+            const r=await fetch(def.fn(url),{signal:timeoutSignal(12000)});
             if(!r.ok){ll("warn",`P${i+1}`,"HTTP "+r.status);pxState(i,"fail");continue;}
             let text=await r.text();
             if(def.json){try{text=JSON.parse(text).contents||text;}catch(_){}}
             const hasCSRF=text.includes("csrf-token");
-            ll("info",`P${i+1}`,`${text.length} bytes | csrf=${hasCSRF?"YES":"NO"}`);
+            // Capture session cookie if worker exposes it
+            const setCookieHdr=r.headers.get("x-set-cookie")||"";
+            if(setCookieHdr){
+                _sessionCookie=setCookieHdr;
+                ll("ok","COOKIE",`Session cookie captured: ${setCookieHdr.slice(0,60)}…`);
+            }
+            ll("info",`P${i+1}`,`${text.length} bytes | csrf=${hasCSRF?"YES":"NO"} | cookie=${setCookieHdr?"YES":"NO"}`);
             if(text.length<500){pxState(i,"fail");continue;}
             pxState(i,hasCSRF?"ok":"fail");
-            if(hasCSRF) return {text,proxy:def.name};
+            if(hasCSRF){ _proxyIndex=i; return {text,proxy:def.name}; }
         }catch(e){ll("err",`P${i+1}`,e.message);pxState(i,"fail");}
     }
     throw new Error("All proxies failed to return HTML with csrf-token.");
 }
 
-// ── proxyPost (POST — foxy-doxy first, skip non-POST proxies) ─────
+// ── proxyPost: tries the same proxy used for GET first ───────────
 async function proxyPost(url, data, referer){
     const body=new URLSearchParams(data).toString();
-    ll("info","POST",`${url}`);
+    ll("info","POST",url);
     ll("data","BODY",JSON.stringify(data));
+    if(_sessionCookie) ll("info","COOKIE",`Forwarding cookie: ${_sessionCookie.slice(0,60)}…`);
 
-    // Try POST-capable proxies first, then fall back to all
-    const order=[
-        ...PROXY_DEFS.map((d,i)=>({...d,i})).filter(d=>d.post),
-        ...PROXY_DEFS.map((d,i)=>({...d,i})).filter(d=>!d.post),
-    ];
+    // Build ordered list: same proxy as GET first, then POST-capable, then rest
+    const ordered=[];
+    if(_proxyIndex>=0) ordered.push({...PROXY_DEFS[_proxyIndex],i:_proxyIndex});
+    PROXY_DEFS.forEach((d,i)=>{ if(d.post && i!==_proxyIndex) ordered.push({...d,i}); });
+    PROXY_DEFS.forEach((d,i)=>{ if(!d.post && i!==_proxyIndex) ordered.push({...d,i}); });
 
-    for(const def of order){
+    for(const def of ordered){
         const i=def.i;
         pxState(i,"trying");
-        ll("info",`P${i+1}`,`POST via ${def.name}${def.post?" (POST-capable)":""}`);
+        ll("info",`P${i+1}`,`POST via ${def.name}${def.cookie?" (cookie-aware)":""}`);
         try{
+            const headers={
+                "Content-Type":"application/x-www-form-urlencoded",
+                "X-Requested-With":"XMLHttpRequest",
+                "Referer":referer,
+            };
+            // Forward session cookie if the proxy supports it
+            if(def.cookie && _sessionCookie) headers["X-Cookie"]=_sessionCookie;
+
             const r=await fetch(def.fn(url),{
-                method:"POST",
-                headers:{
-                    "Content-Type":"application/x-www-form-urlencoded",
-                    "X-Requested-With":"XMLHttpRequest",
-                    "Referer":referer,
-                },
-                body,
-                signal:AbortSignal.timeout(12000),
+                method:"POST", headers, body,
+                signal:timeoutSignal(12000),
             });
+            if(r.status===419){
+                ll("warn",`P${i+1}`,"HTTP 419 — CSRF mismatch (session cookie not forwarded or worker not updated)");
+                pxState(i,"fail");
+                // Show worker setup panel on first 419
+                workerBox.style.display="block";
+                continue;
+            }
             if(!r.ok){ll("warn",`P${i+1}`,"HTTP "+r.status);pxState(i,"fail");continue;}
             let text=await r.text();
             if(def.json){try{text=JSON.parse(text).contents||text;}catch(_){}}
@@ -262,7 +364,7 @@ async function proxyPost(url, data, referer){
             pxState(i,"fail");
         }catch(e){ll("err",`P${i+1}`,e.message);pxState(i,"fail");}
     }
-    throw new Error("POST failed on all proxies — update foxy-doxy worker to support POST.");
+    throw new Error("POST failed on all proxies. Deploy the updated worker code shown above.");
 }
 
 // ── parsers ───────────────────────────────────────────────────────
@@ -273,13 +375,17 @@ function parseServerSpans(html){
     return out;
 }
 function parseEpisodeIds(html){
-    return [...html.matchAll(/idepisode=["'](\w+)["'][^>]*>([^<]*)/g)].map(m=>({id:m[1],label:m[2].trim()||m[1]}));
+    // Handles alphanumeric, hyphens, and underscores in episode IDs
+    return [...html.matchAll(/idepisode=["']([\w-]+)["'][^>]*>([^<]*)/g)].map(m=>({id:m[1],label:m[2].trim()||m[1]}));
 }
 function parseIframe(html){const m=html.match(/<iframe[^>]+src="([^"]+)"/i);return m?m[1]:"";}
-function getRoot(url){const p=new URL(url);return `${p.protocol}//${p.host}`;}
+function getRoot(url){
+    try{ const p=new URL(url); return `${p.protocol}//${p.host}`; }
+    catch(_){ throw new Error("Invalid URL — please paste a full https:// URL"); }
+}
 
 // ── result cards ──────────────────────────────────────────────────
-function addResult(label, url){
+function addResult(label,url){
     resultsEl.style.display="flex";
     const safe=url.replace(/'/g,"\\'");
     const card=document.createElement("div"); card.className="result-card";
@@ -292,7 +398,7 @@ function addResult(label, url){
         </div>`;
     resultsEl.appendChild(card);
 }
-function addFail(label, reason){
+function addFail(label,reason){
     resultsEl.style.display="flex";
     const card=document.createElement("div"); card.className="result-card fail";
     card.innerHTML=`<div class="rc-label">FAILED: ${esc(label)}</div><div class="rc-val" style="color:#e74c3c">${esc(reason)}</div>`;
@@ -300,7 +406,7 @@ function addFail(label, reason){
 }
 
 // ── resolve embed URLs from server list ───────────────────────────
-async function resolveEmbeds(servers, label){
+async function resolveEmbeds(servers,label){
     lhead(`── Resolve embed URLs: ${label} ─────────────────────`);
     const all=await Promise.all(servers.map(async srv=>{
         ll("info","AJAX",`/ajax server=${srv.label}`);
@@ -314,7 +420,7 @@ async function resolveEmbeds(servers, label){
     const valid=all.filter(r=>r.src);
     ll(valid.length?"ok":"err","RESULT",`${valid.length}/${servers.length} embed URLs found`);
     if(valid.length) valid.forEach(r=>addResult(`${label} — ${r.label}`,r.src));
-    else addFail(`${label} — embed URLs`,"No iframe src in /ajax response. Check foxy-doxy POST support.");
+    else addFail(`${label} — embed URLs`,"No iframe src found. Update foxy-doxy worker to be cookie-aware.");
 }
 
 // ── run episode from picker ───────────────────────────────────────
@@ -341,8 +447,9 @@ async function runEpisode(){
 // ── main ─────────────────────────────────────────────────────────
 async function run(){
     if(_running) return;
-    const rawUrl=urlInput.value.trim();
-    if(!rawUrl.startsWith("http")){alert("Paste a valid URL");return;}
+    let rawUrl;
+    try{ rawUrl=urlInput.value.trim(); getRoot(rawUrl); }
+    catch(e){ alert(e.message||"Paste a valid https:// URL"); return; }
     _running=true; runBtn.disabled=true;
     clearAll(); buildGrid();
 
@@ -359,7 +466,12 @@ async function run(){
         ll("ok","PAGE",`Fetched via ${p1} (${html.length} bytes)`);
 
         _token=parseCSRF(html);
-        ll(_token?"ok":"err","CSRF",_token?`${_token.slice(0,24)}…`:"NOT FOUND — proxy may be blocked");
+        ll(_token?"ok":"err","CSRF",_token?`${_token.slice(0,24)}…`:"NOT FOUND");
+
+        if(!_sessionCookie){
+            ll("warn","COOKIE","No session cookie captured — worker may need updating (419 likely on POST)");
+        }
+
         ll("data","HTML",html.slice(0,400).replace(/\s+/g," "));
 
         if(!_token){ addFail("CSRF Token","Not found — proxy returned blocked/cached page"); }
@@ -376,7 +488,6 @@ async function run(){
                 addFail("Movie servers","No server buttons found on page");
             }
         } else {
-            // TV: build episode picker
             lhead("── STEP 2b: Episodes ──────────────────────────────");
             _episodes=parseEpisodeIds(html);
             ll(_episodes.length?"ok":"warn","EPS",`Found ${_episodes.length} episode(s)`);
@@ -384,20 +495,16 @@ async function run(){
             if(_episodes.length>8) ll("info","EPS",`...and ${_episodes.length-8} more`);
 
             if(_episodes.length && _token){
-                // populate episode dropdown
                 epSelect.innerHTML=_episodes.map(e=>`<option value="${e.id}">${esc(e.label)}</option>`).join("");
                 epRow.style.display="flex";
-                ll("ok","UI","Episode picker ready — select an episode and click Get Servers");
-
-                // auto-run first episode
+                ll("ok","UI","Episode picker ready");
                 ll("info","AUTO",`Auto-testing first episode: ${_episodes[0].label}`);
                 epSelect.value=_episodes[0].id;
                 await runEpisode();
             } else {
-                addFail("Episodes",!_episodes.length?"No episodes found on page":"No CSRF token");
+                addFail("Episodes",!_episodes.length?"No episodes found":"No CSRF token");
             }
         }
-
     }catch(e){
         ll("err","FATAL",e.message);
         addFail("Extraction",e.message);
